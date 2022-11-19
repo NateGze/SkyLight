@@ -1,14 +1,27 @@
+/**
+ *
+ *  Copyright 2022 Nate Gengler. All Rights Reserved
+ *
+ *  This software is free for Private Use. You may use and modify the software without distributing it.
+ *  If you make a fork, and add new code, then you should create a pull request to add value, there is no
+ *  guarantee that your pull request will be merged.
+ *
+ *  You may not grant a sublicense to modify and distribute this software to third parties without permission
+ *  from the copyright holder
+ *  Software is provided without warranty and your use of it is at your own risk.
+ *
+ */
+
 definition(
     name: "SkyLight",
     namespace: "TheSky",
-    author: "Nate",
+    author: "NateG",
 	description: "Sync your color temperature changing bulbs with natural daylight color temperatures",
     category: "My Apps",
     singleInstance: true,
-	iconUrl: "http://cdn.device-icons.smartthings.com/Weather/weather14-icn.png",
-	iconX2Url: "http://cdn.device-icons.smartthings.com/Weather/weather14-icn@2x.png"	
+	iconUrl: '',
+	iconX2Url: ''	
 )
-
 
 preferences {
     // The parent app preferences are pretty simple: just use the app input for the child app.
