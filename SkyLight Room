@@ -1,6 +1,16 @@
-/**
-	 *  SkyLight Room (Natural Daylight)
-	 */
+/*  SkyLight Room
+ *
+ *  Copyright 2022 Nate Gengler. All Rights Reserved
+ *
+ *  This software is free for Private Use. You may use and modify the software without distributing it.
+ *  If you make a fork, and add new code, then you should create a pull request to add value, there is no
+ *  guarantee that your pull request will be merged.
+ *
+ *  You may not grant a sublicense to modify and distribute this software to third parties without permission
+ *  from the copyright holder
+ *  Software is provided without warranty and your use of it is at your own risk.
+ *
+ */
 	
 definition(
 	name: "SkyLight Room",
@@ -9,8 +19,8 @@ definition(
 	description: "Sync your color temperature changing bulbs with natural daylight color temperatures",
 	category: "My Apps",
     parent: "TheSky:SkyLight",
-	iconUrl: "http://cdn.device-icons.smartthings.com/Weather/weather14-icn.png",
-	iconX2Url: "http://cdn.device-icons.smartthings.com/Weather/weather14-icn@2x.png"	
+	iconUrl: '',
+	iconX2Url: ''	
 )
 	
 preferences {
@@ -39,33 +49,21 @@ def mainPage()
     	{
 			input(name: "CTbulbs", type: "capability.colorTemperature", title: "Which Temperature Changing Bulbs?", multiple:true, required: true)
 		}
+		section("Use in app refresh of bulbs? ") 
+    	{
+			input "goRefresh", "bool", title: "Refresh Bulbs?", defaultValue: true
+		}
     }
 }      
 
 def secondPage()
 {
 	dynamicPage(name: "secondPage", title: "Optional Master Switch Settings", nextPage: "thirdPage")
-    {
-    	def UseRGBW = false
-        CTbulbs.each { ctbulb ->
-			if (ctbulb.currentState("hue") != null)
-    		{
-    			UseRGBW = true
-        	}
-        }
-        
+    {   
         section("Optional master smart switch (Not absolutely required for direct switched bulbs)") 
     	{
 			input(name: "SmartSwitch", type: "capability.switch", title: "Master Switch", required: false, submitOnChange: true)
 		}
-        
-        if (UseRGBW)
-        {
-        	section("You are using RGBW bulbs... You can add a real or virtual switch here that when switched on will disable natural daylight mode for using these bulbs for non-daylight colors... (Useful for color alarms, daytime discos, etc.)") 
-    		{
-				input(name: "DisableChange", type: "capability.switch", title: "Virtual Switch or Actual Switch", required: false)
-			}
-         }
          
         if (SmartSwitch)
         {   
@@ -84,7 +82,11 @@ def thirdPage()
     {
    		if (!SmartSwitch) // Dumb-switched bulbs
         {	
-            section("Final value to set bulbs when turned on (1 to 99)") // Level 100 reserved as a possible trigger from dumb switched bulbs
+            section("What is the reachback value that your bulbs give when powered on (Color Temp or Level)?")
+    		{
+				input(name: "reachback", type: "number", defaultValue: 2732, required: true)
+			}
+			section("Final level value to set bulbs once turned on (1 to 99)") // Level 100 reserved as a possible trigger from dumb switched bulbs
     		{
 				input(name: "Intensity", type: "number", title: "Level", range: "1..99", defaultValue: 99, required: true)
 			}
@@ -97,17 +99,21 @@ def thirdPage()
     			{
 					input(name: "Intensity", type: "number", title: "Level", range: "1..100", defaultValue: 100, required: true)
 				}
-             }
+            }
+            section("Choose delay before changing color temperature in (s)")
+            {
+                input(name: "SwitchDelay", type: "number", defaultValue: 1, required: true)
+            }
         }
         
-        section("Set the peak color temperature that you want at midday (maximum: 9000)") 
+        section("Set the peak color temperature that you want at midday (maximum: 6500)") 
     	{
-			input(name: "MaxTemp", type: "number", title: "Degrees Kelvin", range: "1500..9000", defaultValue: 6500, required: true)
+			input(name: "MaxTemp", type: "number", title: "Degrees Kelvin", range: "1500..6500", defaultValue: 6500, required: true)
 		}
         
         section("Set the color temperature that you want at sunrise and sunset (minimum: 1500)") 
     	{
-			input(name: "SunsetTemp", type: "number", title: "Degrees Kelvin", range: "1500..9000", defaultValue: 2700, required: true)
+			input(name: "SunsetTemp", type: "number", title: "Degrees Kelvin", range: "1500..6500", defaultValue: 2500, required: true)
         }
     }
 }
@@ -133,7 +139,7 @@ def fourthPage()
 
 			section("Set the finish color temperature (minimum: 1500)") 
     		{
-				input(name: "BedFinishTemp", type: "number", title: "Degrees Kelvin", range: "1500..9000", defaultValue: 1800,  required: true)
+				input(name: "BedFinishTemp", type: "number", title: "Degrees Kelvin", range: "1500..6500", defaultValue: 1800,  required: true)
 			}
          }
     }
@@ -158,7 +164,6 @@ def installed() {
 	unsubscribe()
 	unschedule()
     state.oldSetTemp
-    state.disableCT
     state.lockOut
     state.haveDimmer
 	initialize()
@@ -172,16 +177,8 @@ def updated() {
 	
 private def initialize() {
 	log.info "initialize() with settings: ${settings}"
-
-    subscribe(location, "sunrise", sunriseAndBedtimeHandler)  // checks for lights turned on before sunrise
     
-    // Search for bulbs that have device health information
-    CTbulbs.each { ctbulb ->
-		if (ctbulb.currentState("DeviceWatch-DeviceStatus") != null)
-    	{
-    		subscribe(ctbulb, "DeviceWatch-DeviceStatus.online", bulbOnlineHandler)
-    	}
-    }
+	subscribe(location, "sunrise", sunriseHandler)  // checks for lights turned on before sunrise
     
    	if (SmartSwitch == null)
     {
@@ -198,30 +195,24 @@ private def initialize() {
             subscribe(SmartSwitch, "level", dimLevelHandler)
         }
     }
-
-    if (DisableChange != null)
-    {
-   		subscribe(DisableChange, "switch", disableChangeHandler)
-    }
     
-    state.oldSetTemp = 2700
-    state.disableCT = false
+    state.oldSetTemp = 2732
     state.lockOut = false
-    
+	
     if (UseBeforeBed)
     {
-    	schedule(BedTransitionTime,sunriseAndBedtimeHandler)
-    }
-    
+    	schedule(BedTransitionTime,bedtimeHandler)
+	}
+	
 	runIn(0,smashTempChanger,[overwrite: true])
 }
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// smartSwitchHandler, dumbSwitchHandler, bulbOnlineHandler, and bulbSwitchOnHandler all are different ways
-// of determining that a bulb is now on that wasn't before.  They all funnel to firstTempChanger, which sets
-// an initial color temperature and then starts the scheduler to refresh bulb status, which once accomplished,
-// schedules bulbEval, which determines under the various scenarios, if any bulbs are still on, and if so, sets 
-// them to their new color temperature, and lets the process repeat.
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/****************************************************************************************************************/
+/* smartSwitchHandler, dumbSwitchHandler, bulbOnlineHandler, and bulbSwitchOnHandler all are different ways     */
+/* of determining that a bulb is now on that wasn't before.  They all funnel to firstTempChanger, which sets    */
+/* an initial color temperature and then starts the scheduler to refresh bulb status, which once accomplished,  */
+/* schedules bulbEval, which determines under the various scenarios, if any bulbs are still on, and if so, sets */ 
+/* them to their new color temperature, and lets the process repeat.                                            */
+/****************************************************************************************************************/
 def smartSwitchHandler(evt)
 {
 	if (evt.value == 'on')
@@ -229,15 +220,15 @@ def smartSwitchHandler(evt)
 		state.lockOut = true
         CTbulbs?.on()
 
-		runIn(0,smashTempChanger,[overwrite: true])
+		runIn(SwitchDelay,smashTempChanger,[overwrite: true])
         
         if (state.haveDimmer)
         {
-        	runIn(1,dimLevel,[overwrite: true])
+        	runIn(SwitchDelay+1,dimLevel,[overwrite: true])
         }
         else
         {
-        	runIn(1,finalLevel,[overwrite: true])
+        	runIn(SwitchDelay+1,finalLevel,[overwrite: true])
         }
     }
     else // Switched off
@@ -250,7 +241,7 @@ def smartSwitchHandler(evt)
 
 def dumbCTSwitchHandler(evt)
 {
-	if ((evt.integerValue == 100) || (evt.integerValue == 2702) || (evt.integerValue == 2703) || (evt.integerValue == 2732))
+	if (evt.integerValue == reachback)
     {    
         runIn(1,smashTempChanger,[overwrite: true])
                 
@@ -263,11 +254,6 @@ def dumbBulbOnHandler(evt)
 	runIn(1,smashTempChanger,[overwrite: true])
                 
     runIn(2,finalLevel,[overwrite: true])
-}
-
-def bulbOnlineHandler(evt)
-{
-   	runIn(1,delicateTempChanger,[overwrite: true])
 }
 
 def bulbSwitchOnHandler(evt)
@@ -298,9 +284,9 @@ def dimLevel()
     }
 }
 
-def sunriseAndBedtimeHandler(evt)
+def stimulator()
 {
-    def anyOn = false
+	def anyOn = false
     
     if (SmartSwitch)
     {
@@ -313,7 +299,7 @@ def sunriseAndBedtimeHandler(evt)
     {
     	// No master switch, search for on bulbs
     	CTbulbs.each { ctbulb ->
-			if ((ctbulb.currentSwitch == 'on') && (ctbulb.currentState("DeviceWatch-DeviceStatus") != 'offline'))
+			if (ctbulb.currentSwitch == 'on')
     		{
     			anyOn = true 
     		}
@@ -324,17 +310,20 @@ def sunriseAndBedtimeHandler(evt)
    		delicateTempChanger()
     }
 }
-
-def disableChangeHandler(evt)
+	
+def sunriseHandler(evt)
 {
-	if (evt.value == 'on')
-    {
-    	state.disableCT = true
-    }
-    else
-    {
-    	state.disableCT = false
-    }
+	stimulator()
+	
+	if (UseBeforeBed)
+	{
+		runIn(83700,stimulator)
+	}
+}
+
+def bedtimeHandler(evt)
+{
+    stimulator()
 }
 
 def smashTempChanger()
@@ -342,10 +331,7 @@ def smashTempChanger()
    	def colorTemp = getCT()
     
    	// Change them all fast
-   	if (state.disableCT == false)
-   	{
-		CTbulbs?.setColorTemperature(colorTemp)
-    }
+    CTbulbs?.setColorTemperature(colorTemp)
     
     state.oldSetTemp = colorTemp
 
@@ -356,15 +342,13 @@ def delicateTempChanger() // for less than all of the bulbs
 {
    	def colorTemp = getCT()
     
-   	if (state.disableCT == false)
-   	{
-		CTbulbs.each { ctbulb ->
-    		if ((ctbulb.currentSwitch == 'on') && (ctbulb.currentState("DeviceWatch-DeviceStatus") != 'offline'))
-	   		{
-        		ctbulb.setColorTemperature(colorTemp)
-    		}
-        }
-     }
+    // Look for bulbs that are on and in CT mode
+	CTbulbs.each { ctbulb ->
+    	if ((ctbulb.currentSwitch == 'on') && (ctbulb.currentColorMode != 'RGB'))
+		{
+       		ctbulb.setColorTemperature(colorTemp)
+    	}
+    }
     
     state.oldSetTemp = colorTemp
 
@@ -385,7 +369,10 @@ def finalLevel()
 def soRefreshing()
 {
     // Make sure all bulb values are updating colorTemps, etc...
-    CTbulbs?.refresh()
+	if (goRefresh == true)
+	{
+    	CTbulbs?.refresh()
+	}
     state.lockOut = false
     runIn(300,bulbEval) // 5 minute offset
 }
@@ -406,9 +393,9 @@ def bulbEval()
         	if (SmartSwitch.currentSwitch == 'on')
             {
             	CTbulbs.each { ctbulb ->
-    				if ((ctbulb.currentSwitch == 'on') && (ctbulb.currentState("DeviceWatch-DeviceStatus") != 'offline'))
+    				if (ctbulb.currentSwitch == 'on')
 	   				{
-                    	if (state.disableCT == false)
+                    	if (ctbulb.currentColorMode != 'RGB')
                 		{
                 			ctbulb.setColorTemperature(colorTemp)
                     		Awake = Awake + 1
@@ -421,7 +408,7 @@ def bulbEval()
         {
         	// Dumb switched bulbs must be checked for 'on' state indirectly by looking for CT changing
     		CTbulbs.each { ctbulb ->
-    			if ((ctbulb.currentSwitch == 'on') && (ctbulb.currentState("DeviceWatch-DeviceStatus") != 'offline'))
+    			if (ctbulb.currentSwitch == 'on')
 	   			{
             		difference = (oldSetTemp - ctbulb.currentColorTemperature).abs()
                 
@@ -431,7 +418,7 @@ def bulbEval()
                 	}
             	
                 	// Set the new color temperature for the bulb
-                	if (state.disableCT == false)
+                	if (ctbulb.currentColorMode != 'RGB')
             		{
        	    			ctbulb.setColorTemperature(colorTemp)
             		}
@@ -470,19 +457,19 @@ def getCT()
 	def currentTime = now()
     
 	// Pre dawn
-    if(currentTime <= firstLight)
+    if (UseBeforeBed)
     {
-    	if (UseBeforeBed)
-        {
+    	if(currentTime <= firstLight)
+    	{
     		def yesterday = thisDay.minus(1)
     		yesterday = df.format(yesterday)
             
             if (!days || days.contains(yesterday)) 
     		{
-            	// if less than 2 hours before sunrise, don't use bedtime ct, but use sunrise ct instead
-            	if ((firstLight-currentTime) < 7200000)
+            	// if less than 1 hours before sunrise, don't use bedtime ct, scale up to use sunrise/sunset ct
+            	if ((firstLight-currentTime) < 3600000)
                 {
-                     colorT = SunsetTemp
+                    colorT = BedFinishTemp + ((currentTime - (firstLight - 3600000)) * (SunsetTemp - BedFinishTemp) / 3600000)
                 }
                 else
                 {
@@ -497,6 +484,13 @@ def getCT()
         else
         {
         	colorT = SunsetTemp
+        }
+	}
+	else
+	{
+    	if(currentTime <= firstLight)
+        {
+            colorT = SunsetTemp
         }
 	}
         
@@ -533,7 +527,7 @@ def getCT()
             }
             else
             {
-            	// More rapid transition to 2700K
+            	// More rapid transition to dusk ct
 				colorT = (MaxTemp - range / 4)  - ((currentTime - lateAfternoon) / (lastLight - lateAfternoon) * range * 3 / 4)
 			}
         }
